@@ -1,11 +1,16 @@
-import { apiClient } from 'api';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import Page from 'pages/Page';
 
-import { IMessageElement, useApi, useChatData } from '@chainlit/react-client';
-import { ElementView } from '@chainlit/react-components';
+import {
+  IMessageElement,
+  useApi,
+  useChatData,
+  useConfig
+} from '@chainlit/react-client';
+
+import { ElementView } from 'components/atoms/elements/ElementView';
 
 import { useQuery } from 'hooks/query';
 
@@ -13,30 +18,32 @@ export default function Element() {
   const { id } = useParams();
   const query = useQuery();
   const { elements } = useChatData();
+  const { config } = useConfig();
 
   const [element, setElement] = useState<IMessageElement | null>(null);
   const navigate = useNavigate();
 
-  const conversationId = query.get('conversation');
+  const threadId = query.get('thread');
+
+  const dataPersistence = config?.dataPersistence;
 
   const { data, error } = useApi<IMessageElement>(
-    apiClient,
-    id && conversationId
-      ? `/project/conversation/${conversationId}/element/${id}`
+    id && threadId && dataPersistence
+      ? `/project/thread/${threadId}/element/${id}`
       : null
   );
 
   useEffect(() => {
     if (data) {
       setElement(data);
-    } else if (id && !conversationId && !element) {
+    } else if (id && !dataPersistence && !element) {
       const foundElement = elements.find((element) => element.id === id);
 
       if (foundElement) {
         setElement(foundElement);
       }
     }
-  }, [data, element, elements, id, conversationId]);
+  }, [data, element, elements, id, threadId]);
 
   if (!element || error) {
     return null;

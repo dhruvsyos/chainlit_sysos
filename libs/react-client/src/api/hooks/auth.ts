@@ -1,35 +1,41 @@
 import jwt_decode from 'jwt-decode';
-import { useEffect } from 'react';
+import { useContext, useEffect } from 'react';
 import { useRecoilState, useSetRecoilState } from 'recoil';
+import { ChainlitContext } from 'src/context';
 import {
   accessTokenState,
-  conversationsHistoryState,
+  authState,
+  threadHistoryState,
   userState
 } from 'src/state';
-import { IAppUser } from 'src/types';
+import { IAuthConfig, IUser } from 'src/types';
 import { getToken, removeToken, setToken } from 'src/utils/token';
 
-import { ChainlitAPI } from '..';
 import { useApi } from './api';
 
-export const useAuth = (apiClient: ChainlitAPI) => {
-  const { data, isLoading } = useApi<{
-    requireLogin: boolean;
-    passwordAuth: boolean;
-    headerAuth: boolean;
-    oauthProviders: string[];
-  }>(apiClient, '/auth/config');
-  const [accessToken, setAccessToken] = useRecoilState(accessTokenState);
-  const setConversationsHistory = useSetRecoilState(conversationsHistoryState);
+export const useAuth = () => {
+  const apiClient = useContext(ChainlitContext);
+  const [authConfig, setAuthConfig] = useRecoilState(authState);
   const [user, setUser] = useRecoilState(userState);
+  const { data, isLoading } = useApi<IAuthConfig>(
+    authConfig ? null : '/auth/config'
+  );
+  const [accessToken, setAccessToken] = useRecoilState(accessTokenState);
+  const setThreadHistory = useSetRecoilState(threadHistoryState);
 
-  const isReady = !!(!isLoading && data);
+  useEffect(() => {
+    if (!data) return;
+    setAuthConfig(data);
+  }, [data, setAuthConfig]);
 
-  const logout = () => {
+  const isReady = !!(!isLoading && authConfig);
+
+  const logout = async () => {
+    await apiClient.logout();
     setUser(null);
     removeToken();
     setAccessToken('');
-    setConversationsHistory(undefined);
+    setThreadHistory(undefined);
   };
 
   const saveAndSetToken = (token: string | null | undefined) => {
@@ -38,10 +44,10 @@ export const useAuth = (apiClient: ChainlitAPI) => {
       return;
     }
     try {
-      const { exp, ...AppUser } = jwt_decode(token) as any;
+      const { exp, ...User } = jwt_decode(token) as any;
       setToken(token);
       setAccessToken(`Bearer ${token}`);
-      setUser(AppUser as IAppUser);
+      setUser(User as IUser);
     } catch (e) {
       console.error(
         'Invalid token, clearing token from local storage',
@@ -62,11 +68,10 @@ export const useAuth = (apiClient: ChainlitAPI) => {
 
   const isAuthenticated = !!accessToken;
 
-  if (data && !data.requireLogin) {
+  if (authConfig && !authConfig.requireLogin) {
     return {
-      data,
+      authConfig,
       user: null,
-      role: 'ANONYMOUS',
       isReady,
       isAuthenticated: true,
       accessToken: '',
@@ -76,9 +81,8 @@ export const useAuth = (apiClient: ChainlitAPI) => {
   }
 
   return {
-    data,
+    data: authConfig,
     user: user,
-    role: user?.role,
     isAuthenticated,
     isReady,
     accessToken: accessToken,

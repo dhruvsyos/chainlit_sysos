@@ -2,33 +2,29 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useRecoilState, useSetRecoilState } from 'recoil';
 import 'regenerator-runtime';
 
-import SendIcon from '@mui/icons-material/Telegram';
 import TuneIcon from '@mui/icons-material/Tune';
 import { Box, IconButton, Stack, TextField } from '@mui/material';
 import InputAdornment from '@mui/material/InputAdornment';
 
-import {
-  FileSpec,
-  IFileElement,
-  IFileResponse,
-  useChatData
-} from '@chainlit/react-client';
-import { Attachments } from '@chainlit/react-components';
+import { FileSpec, useChatData } from '@chainlit/react-client';
 
+import { useTranslation } from 'components/i18n/Translator';
+import { Attachments } from 'components/molecules/attachments';
 import HistoryButton from 'components/organisms/chat/history';
 
-import { attachmentsState } from 'state/chat';
-import { chatHistoryState } from 'state/chatHistory';
-import { chatSettingsOpenState, projectSettingsState } from 'state/project';
+import { IAttachment, attachmentsState } from 'state/chat';
+import { chatSettingsOpenState } from 'state/project';
+import { inputHistoryState } from 'state/userInputHistory';
 
+import MicButton from './MicButton';
+import { SubmitButton } from './SubmitButton';
 import UploadButton from './UploadButton';
-import SpeechButton from './speechButton';
 
 interface Props {
   fileSpec: FileSpec;
-  onFileUpload: (payload: IFileResponse[]) => void;
+  onFileUpload: (payload: File[]) => void;
   onFileUploadError: (error: string) => void;
-  onSubmit: (message: string, files?: IFileElement[]) => void;
+  onSubmit: (message: string, attachments?: IAttachment[]) => void;
   onReply: (message: string) => void;
 }
 
@@ -43,42 +39,43 @@ function getLineCount(el: HTMLDivElement) {
 
 const Input = memo(
   ({ fileSpec, onFileUpload, onFileUploadError, onSubmit, onReply }: Props) => {
-    const [fileElements, setFileElements] = useRecoilState(attachmentsState);
-    const [pSettings] = useRecoilState(projectSettingsState);
-    const setChatHistory = useSetRecoilState(chatHistoryState);
+    const [attachments, setAttachments] = useRecoilState(attachmentsState);
+    const setInputHistory = useSetRecoilState(inputHistoryState);
     const setChatSettingsOpen = useSetRecoilState(chatSettingsOpenState);
 
     const ref = useRef<HTMLDivElement>(null);
-    const { loading, askUser, chatSettingsInputs, disabled } = useChatData();
+    const {
+      loading,
+      askUser,
+      chatSettingsInputs,
+      disabled: _disabled
+    } = useChatData();
+
+    const disabled = _disabled || !!attachments.find((a) => !a.uploaded);
 
     const [value, setValue] = useState('');
     const [isComposing, setIsComposing] = useState(false);
 
-    const showTextToSpeech = pSettings?.features.speech_to_text?.enabled;
+    const { t } = useTranslation();
 
     useEffect(() => {
       const pasteEvent = (event: ClipboardEvent) => {
         if (event.clipboardData && event.clipboardData.items) {
           const items = Array.from(event.clipboardData.items);
+
+          // Attempt to handle text data first
+          const textData = event.clipboardData.getData('text/plain');
+          if (textData) {
+            // Skip file handling if text data is present
+            return;
+          }
+
+          // If no text data, check for files (e.g., images)
           items.forEach((item) => {
             if (item.kind === 'file') {
               const file = item.getAsFile();
               if (file) {
-                const reader = new FileReader();
-                reader.onload = function (e) {
-                  const content = e.target?.result as ArrayBuffer;
-                  if (content) {
-                    onFileUpload([
-                      {
-                        name: file.name,
-                        type: file.type,
-                        content,
-                        size: file.size
-                      }
-                    ]);
-                  }
-                };
-                reader.readAsArrayBuffer(file);
+                onFileUpload([file]);
               }
             }
           });
@@ -111,17 +108,17 @@ const Input = memo(
       if (askUser) {
         onReply(value);
       } else {
-        onSubmit(value, fileElements);
+        onSubmit(value, attachments);
       }
-      setFileElements([]);
+      setAttachments([]);
       setValue('');
     }, [
       value,
       disabled,
       setValue,
       askUser,
-      fileElements,
-      setFileElements,
+      attachments,
+      setAttachments,
       onSubmit
     ]);
 
@@ -135,11 +132,11 @@ const Input = memo(
         } else if (e.key === 'ArrowUp') {
           const lineCount = getLineCount(e.currentTarget as HTMLDivElement);
           if (lineCount <= 1) {
-            setChatHistory((old) => ({ ...old, open: true }));
+            setInputHistory((old) => ({ ...old, open: true }));
           }
         }
       },
-      [submit, setChatHistory, isComposing]
+      [submit, setInputHistory, isComposing]
     );
 
     const onHistoryClick = useCallback((content: string) => {
@@ -151,6 +148,12 @@ const Input = memo(
     const startAdornment = (
       <>
         <HistoryButton disabled={disabled} onClick={onHistoryClick} />
+        <UploadButton
+          disabled={disabled}
+          fileSpec={fileSpec}
+          onFileUploadError={onFileUploadError}
+          onFileUpload={onFileUpload}
+        />
         {chatSettingsInputs.length > 0 && (
           <IconButton
             id="chat-settings-open-modal"
@@ -161,47 +164,29 @@ const Input = memo(
             <TuneIcon />
           </IconButton>
         )}
-        {showTextToSpeech ? (
-          <SpeechButton
-            onSpeech={(transcript) => setValue((text) => text + transcript)}
-            language={pSettings.features?.speech_to_text?.language}
-            disabled={disabled}
-          />
-        ) : null}
-        <UploadButton
-          disabled={disabled}
-          fileSpec={fileSpec}
-          onFileUploadError={onFileUploadError}
-          onFileUpload={onFileUpload}
-        />
+        <MicButton disabled={disabled} />
       </>
-    );
-    const endAdornment = (
-      <IconButton disabled={disabled} color="inherit" onClick={() => submit()}>
-        <SendIcon />
-      </IconButton>
     );
 
     return (
       <Stack
         sx={{
           backgroundColor: 'background.paper',
-          borderRadius: 1,
-          border: (theme) => `1px solid ${theme.palette.divider}`,
+          borderRadius: '1.5rem',
           boxShadow: 'box-shadow: 0px 2px 4px 0px #0000000D',
           textarea: {
             height: '34px',
             maxHeight: '30vh',
             overflowY: 'auto !important',
             resize: 'none',
-            paddingBottom: '0.75rem',
-            paddingTop: '0.75rem',
+            paddingBottom: '0.7rem',
+            paddingTop: '0.7rem',
             color: 'text.primary',
             lineHeight: '24px'
           }
         }}
       >
-        {fileElements.length > 0 ? (
+        {attachments.length > 0 ? (
           <Box
             sx={{
               mt: 2,
@@ -209,10 +194,7 @@ const Input = memo(
               padding: '2px'
             }}
           >
-            <Attachments
-              fileElements={fileElements}
-              setFileElements={setFileElements}
-            />
+            <Attachments />
           </Box>
         ) : null}
 
@@ -223,7 +205,9 @@ const Input = memo(
           multiline
           variant="standard"
           autoComplete="false"
-          placeholder={'Type your message here...'}
+          placeholder={t(
+            'components.organisms.chat.inputBox.input.placeholder'
+          )}
           disabled={disabled}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -242,12 +226,7 @@ const Input = memo(
               </InputAdornment>
             ),
             endAdornment: (
-              <InputAdornment
-                position="end"
-                sx={{ mr: 1, color: 'text.secondary' }}
-              >
-                {endAdornment}
-              </InputAdornment>
+              <SubmitButton onSubmit={submit} disabled={disabled || !value} />
             )
           }}
         />

@@ -1,17 +1,19 @@
-export type Role = 'USER' | 'ADMIN' | 'OWNER' | 'ANONYMOUS';
-
-export type AppUserProvider =
+export type AuthProvider =
   | 'credentials'
   | 'header'
   | 'github'
   | 'google'
-  | 'azure-ad';
+  | 'azure-ad'
+  | 'azure-ad-hybrid';
 
-export interface IAppUser {
-  id: string;
-  username: string;
-  role: Role;
+export interface IUserMetadata extends Record<string, any> {
   tags?: string[];
   image?: string;
-  provider?: AppUserProvider;
+  provider?: AuthProvider;
+}
+
+export interface IUser {
+  id: string;
+  identifier: string;
+  metadata: IUserMetadata;
 }

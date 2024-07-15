@@ -1,18 +1,19 @@
-import { apiClient } from 'api';
-import { useAuth } from 'api/auth';
-import { useEffect, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { AuthLogin } from '@chainlit/react-components';
-
 import { Logo } from 'components/atoms/logo';
+import { Translator } from 'components/i18n';
+import { AuthLogin } from 'components/molecules/auth';
 
 import { useQuery } from 'hooks/query';
+
+import { ChainlitContext, useAuth } from 'client-types/*';
 
 export default function Login() {
   const query = useQuery();
   const { data: config, setAccessToken, user } = useAuth();
   const [error, setError] = useState('');
+  const apiClient = useContext(ChainlitContext);
 
   const navigate = useNavigate();
 
@@ -65,7 +66,7 @@ export default function Login() {
 
   return (
     <AuthLogin
-      title="Login to access the app."
+      title={<Translator path="components.molecules.auth.authLogin.title" />}
       error={error}
       callbackUrl="/"
       providers={config?.oauthProviders || []}

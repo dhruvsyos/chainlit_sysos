@@ -1,3 +1,4 @@
+import inspect
 import os
 
 from dotenv import load_dotenv
@@ -5,8 +6,10 @@ from dotenv import load_dotenv
 env_found = load_dotenv(dotenv_path=os.path.join(os.getcwd(), ".env"))
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
+from fastapi import Request, Response
+from pydantic.dataclasses import dataclass
 from starlette.datastructures import Headers
 
 if TYPE_CHECKING:
@@ -16,16 +19,19 @@ if TYPE_CHECKING:
         AsyncLangchainCallbackHandler,
     )
     from chainlit.llama_index.callbacks import LlamaIndexCallbackHandler
+    from chainlit.openai import instrument_openai
+    from chainlit.mistralai import instrument_mistralai
 
 import chainlit.input_widget as input_widget
 from chainlit.action import Action
 from chainlit.cache import cache
+from chainlit.chat_context import chat_context
 from chainlit.chat_settings import ChatSettings
-from chainlit.client.base import AppUser, ConversationDict, PersistedAppUser
 from chainlit.config import config
+from chainlit.context import context
 from chainlit.element import (
     Audio,
-    Avatar,
+    Component,
     File,
     Image,
     Pdf,
@@ -46,31 +52,34 @@ from chainlit.message import (
     Message,
 )
 from chainlit.oauth_providers import get_configured_oauth_providers
+from chainlit.step import Step, step
 from chainlit.sync import make_async, run_sync
 from chainlit.telemetry import trace
-from chainlit.types import ChatProfile, FileSpec
+from chainlit.types import AudioChunk, ChatProfile, Starter, ThreadDict
+from chainlit.user import PersistedUser, User
 from chainlit.user_session import user_session
 from chainlit.utils import make_module_getattr, wrap_user_function
 from chainlit.version import __version__
+from literalai import ChatGeneration, CompletionGeneration, GenerationMessage
 
 if env_found:
     logger.info("Loaded .env file")
 
 
 @trace
-def password_auth_callback(func: Callable[[str, str], Optional[AppUser]]) -> Callable:
+def password_auth_callback(func: Callable[[str, str], Optional[User]]) -> Callable:
     """
     Framework agnostic decorator to authenticate the user.
 
     Args:
-        func (Callable[[str, str], Optional[AppUser]]): The authentication callback to execute. Takes the email and password as parameters.
+        func (Callable[[str, str], Optional[User]]): The authentication callback to execute. Takes the email and password as parameters.
 
     Example:
         @cl.password_auth_callback
-        async def password_auth_callback(username: str, password: str) -> Optional[AppUser]:
+        async def password_auth_callback(username: str, password: str) -> Optional[User]:
 
     Returns:
-        Callable[[str, str], Optional[AppUser]]: The decorated authentication callback.
+        Callable[[str, str], Optional[User]]: The decorated authentication callback.
     """
 
     config.code.password_auth_callback = wrap_user_function(func)
@@ -78,19 +87,19 @@ def password_auth_callback(func: Callable[[str, str], Optional[AppUser]]) -> Cal
 
 
 @trace
-def header_auth_callback(func: Callable[[Headers], Optional[AppUser]]) -> Callable:
+def header_auth_callback(func: Callable[[Headers], Optional[User]]) -> Callable:
     """
     Framework agnostic decorator to authenticate the user via a header
 
     Args:
-        func (Callable[[Headers], Optional[AppUser]]): The authentication callback to execute.
+        func (Callable[[Headers], Optional[User]]): The authentication callback to execute.
 
     Example:
         @cl.header_auth_callback
-        async def header_auth_callback(headers: Headers) -> Optional[AppUser]:
+        async def header_auth_callback(headers: Headers) -> Optional[User]:
 
     Returns:
-        Callable[[Headers], Optional[AppUser]]: The decorated authentication callback.
+        Callable[[Headers], Optional[User]]: The decorated authentication callback.
     """
 
     config.code.header_auth_callback = wrap_user_function(func)
@@ -99,20 +108,20 @@ def header_auth_callback(func: Callable[[Headers], Optional[AppUser]]) -> Callab
 
 @trace
 def oauth_callback(
-    func: Callable[[str, str, Dict[str, str], AppUser], Optional[AppUser]]
+    func: Callable[[str, str, Dict[str, str], User], Optional[User]]
 ) -> Callable:
     """
     Framework agnostic decorator to authenticate the user via oauth
 
     Args:
-        func (Callable[[str, str, Dict[str, str], AppUser], Optional[AppUser]]): The authentication callback to execute.
+        func (Callable[[str, str, Dict[str, str], User], Optional[User]]): The authentication callback to execute.
 
     Example:
         @cl.oauth_callback
-        async def oauth_callback(provider_id: str, token: str, raw_user_data: Dict[str, str], default_app_user: AppUser) -> Optional[AppUser]:
+        async def oauth_callback(provider_id: str, token: str, raw_user_data: Dict[str, str], default_app_user: User, id_token: Optional[str]) -> Optional[User]:
 
     Returns:
-        Callable[[str, str, Dict[str, str], AppUser], Optional[AppUser]]: The decorated authentication callback.
+        Callable[[str, str, Dict[str, str], User], Optional[User]]: The decorated authentication callback.
     """
 
     if len(get_configured_oauth_providers()) == 0:
@@ -121,6 +130,17 @@ def oauth_callback(
         )
 
     config.code.oauth_callback = wrap_user_function(func)
+    return func
+
+
+@trace
+def on_logout(func: Callable[[Request, Response], Any]) -> Callable:
+    """
+    Function called when the user logs out.
+    Takes the FastAPI request and response as parameters.
+    """
+
+    config.code.on_logout = wrap_user_function(func)
     return func
 
 
@@ -137,7 +157,15 @@ def on_message(func: Callable) -> Callable:
         Callable[[str], Any]: The decorated on_message function.
     """
 
-    config.code.on_message = wrap_user_function(func)
+    async def with_parent_id(message: Message):
+        async with Step(name="on_message", type="run", parent_id=message.id) as s:
+            s.input = message.content
+            if len(inspect.signature(func).parameters) > 0:
+                await func(message)
+            else:
+                await func()
+
+    config.code.on_message = wrap_user_function(with_parent_id)
     return func
 
 
@@ -153,12 +181,14 @@ def on_chat_start(func: Callable) -> Callable:
         Callable[], Any]: The decorated hook.
     """
 
-    config.code.on_chat_start = wrap_user_function(func, with_task=True)
+    config.code.on_chat_start = wrap_user_function(
+        step(func, name="on_chat_start", type="run"), with_task=True
+    )
     return func
 
 
 @trace
-def on_chat_resume(func: Callable[[ConversationDict], Any]) -> Callable:
+def on_chat_resume(func: Callable[[ThreadDict], Any]) -> Callable:
     """
     Hook to react to resume websocket connection event.
 
@@ -175,19 +205,35 @@ def on_chat_resume(func: Callable[[ConversationDict], Any]) -> Callable:
 
 @trace
 def set_chat_profiles(
-    func: Callable[[Optional["AppUser"]], List["ChatProfile"]]
+    func: Callable[[Optional["User"]], List["ChatProfile"]]
 ) -> Callable:
     """
-    Programmatic declaration of the available chat profiles (can depend on the AppUser from the session if authentication is setup).
+    Programmatic declaration of the available chat profiles (can depend on the User from the session if authentication is setup).
 
     Args:
-        func (Callable[[Optional["AppUser"]], List["ChatProfile"]]): The function declaring the chat profiles.
+        func (Callable[[Optional["User"]], List["ChatProfile"]]): The function declaring the chat profiles.
 
     Returns:
-        Callable[[Optional["AppUser"]], List["ChatProfile"]]: The decorated function.
+        Callable[[Optional["User"]], List["ChatProfile"]]: The decorated function.
     """
 
     config.code.set_chat_profiles = wrap_user_function(func)
+    return func
+
+
+@trace
+def set_starters(func: Callable[[Optional["User"]], List["Starter"]]) -> Callable:
+    """
+    Programmatic declaration of the available starter (can depend on the User from the session if authentication is setup).
+
+    Args:
+        func (Callable[[Optional["User"]], List["Starter"]]): The function declaring the starters.
+
+    Returns:
+        Callable[[Optional["User"]], List["Starter"]]: The decorated function.
+    """
+
+    config.code.set_starters = wrap_user_function(func)
     return func
 
 
@@ -204,6 +250,40 @@ def on_chat_end(func: Callable) -> Callable:
     """
 
     config.code.on_chat_end = wrap_user_function(func, with_task=True)
+    return func
+
+
+@trace
+def on_audio_chunk(func: Callable) -> Callable:
+    """
+    Hook to react to the audio chunks being sent.
+
+    Args:
+        chunk (AudioChunk): The audio chunk being sent.
+
+    Returns:
+        Callable[], Any]: The decorated hook.
+    """
+
+    config.code.on_audio_chunk = wrap_user_function(func, with_task=False)
+    return func
+
+
+@trace
+def on_audio_end(func: Callable) -> Callable:
+    """
+    Hook to react to the audio stream ending. This is called after the last audio chunk is sent.
+
+    Args:
+    elements ([List[Element]): The files that were uploaded before starting the audio stream (if any).
+
+    Returns:
+        Callable[], Any]: The decorated hook.
+    """
+
+    config.code.on_audio_end = wrap_user_function(
+        step(func, name="on_audio_end", type="run"), with_task=True
+    )
     return func
 
 
@@ -225,7 +305,7 @@ def author_rename(func: Callable[[str], str]) -> Callable[[str], str]:
 @trace
 def on_stop(func: Callable) -> Callable:
     """
-    Hook to react to the user stopping a conversation.
+    Hook to react to the user stopping a thread.
 
     Args:
         func (Callable[[], Any]): The stop hook to execute.
@@ -279,26 +359,42 @@ def sleep(duration: int):
     return asyncio.sleep(duration)
 
 
+@dataclass()
+class CopilotFunction:
+    name: str
+    args: Dict[str, Any]
+
+    def acall(self):
+        return context.emitter.send_call_fn(self.name, self.args)
+
+
 __getattr__ = make_module_getattr(
     {
         "LangchainCallbackHandler": "chainlit.langchain.callbacks",
         "AsyncLangchainCallbackHandler": "chainlit.langchain.callbacks",
         "LlamaIndexCallbackHandler": "chainlit.llama_index.callbacks",
         "HaystackAgentCallbackHandler": "chainlit.haystack.callbacks",
+        "instrument_openai": "chainlit.openai",
+        "instrument_mistralai": "chainlit.mistralai",
     }
 )
 
 __all__ = [
+    "ChatProfile",
+    "Starter",
     "user_session",
+    "chat_context",
+    "CopilotFunction",
+    "AudioChunk",
     "Action",
-    "AppUser",
-    "PersistedAppUser",
+    "User",
+    "PersistedUser",
     "Audio",
     "Pdf",
     "Plotly",
     "Image",
     "Text",
-    "Avatar",
+    "Component",
     "Pyplot",
     "File",
     "Task",
@@ -312,6 +408,12 @@ __all__ = [
     "AskUserMessage",
     "AskActionMessage",
     "AskFileMessage",
+    "Step",
+    "step",
+    "ChatGeneration",
+    "CompletionGeneration",
+    "GenerationMessage",
+    "on_logout",
     "on_chat_start",
     "on_chat_end",
     "on_chat_resume",
@@ -325,10 +427,13 @@ __all__ = [
     "run_sync",
     "make_async",
     "cache",
+    "context",
     "LangchainCallbackHandler",
     "AsyncLangchainCallbackHandler",
     "LlamaIndexCallbackHandler",
     "HaystackAgentCallbackHandler",
+    "instrument_openai",
+    "instrument_mistralai",
 ]
 
 

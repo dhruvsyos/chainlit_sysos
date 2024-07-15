@@ -1,15 +1,17 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import AddIcon from '@mui/icons-material/Add';
-import { Box } from '@mui/material';
+import { Box, IconButton, IconButtonProps, Tooltip } from '@mui/material';
 
 import { useChatInteract } from '@chainlit/react-client';
-import { AccentButton } from '@chainlit/react-components';
+
+import { Translator } from 'components/i18n';
+
+import SquarePenIcon from 'assets/squarePen';
 
 import NewChatDialog from './newChatDialog';
 
-export default function NewChatButton() {
+export default function NewChatButton(props: IconButtonProps) {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const { clear } = useChatInteract();
@@ -30,14 +32,13 @@ export default function NewChatButton() {
 
   return (
     <Box>
-      <AccentButton
-        id="new-chat-button"
-        variant="outlined"
-        onClick={handleClickOpen}
-        startIcon={<AddIcon />}
+      <Tooltip
+        title={<Translator path="components.molecules.newChatButton.newChat" />}
       >
-        New Chat
-      </AccentButton>
+        <IconButton id="new-chat-button" onClick={handleClickOpen} {...props}>
+          <SquarePenIcon sx={{ height: 20, width: 20 }} />
+        </IconButton>
+      </Tooltip>
       <NewChatDialog
         open={open}
         handleClose={handleClose}

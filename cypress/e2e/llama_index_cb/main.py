@@ -1,6 +1,6 @@
-from llama_index.callbacks.schema import CBEventType, EventPayload
-from llama_index.llms.base import ChatMessage, ChatResponse
-from llama_index.schema import NodeWithScore, TextNode
+from llama_index.core.callbacks.schema import CBEventType, EventPayload
+from llama_index.core.llms import ChatMessage, ChatResponse
+from llama_index.core.schema import NodeWithScore, TextNode
 
 import chainlit as cl
 
@@ -13,6 +13,8 @@ async def start():
 
     cb.on_event_start(CBEventType.RETRIEVE, payload={})
 
+    await cl.sleep(0.2)
+
     cb.on_event_end(
         CBEventType.RETRIEVE,
         payload={
@@ -23,6 +25,8 @@ async def start():
     )
 
     cb.on_event_start(CBEventType.LLM)
+
+    await cl.sleep(0.2)
 
     response = ChatResponse(message=ChatMessage(content="This is the LLM response"))
     cb.on_event_end(

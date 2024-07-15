@@ -1,23 +1,17 @@
-import { wsEndpoint } from 'api';
-import { useAuth } from 'api/auth';
 import { useEffect } from 'react';
-import { Toaster } from 'react-hot-toast';
 import { RouterProvider } from 'react-router-dom';
 import { useRecoilValue } from 'recoil';
 import { router } from 'router';
+import { Toaster } from 'sonner';
+import { makeTheme } from 'theme';
 
 import { Box, GlobalStyles } from '@mui/material';
 import { Theme, ThemeProvider } from '@mui/material/styles';
 
-import { useChatSession } from '@chainlit/react-client';
-import { makeTheme } from '@chainlit/react-components/theme';
+import { useAuth, useChatSession, useConfig } from '@chainlit/react-client';
 
-import Hotkeys from 'components/Hotkeys';
-import SettingsModal from 'components/molecules/settingsModal';
 import ChatSettingsModal from 'components/organisms/chat/settings';
-import PromptPlayground from 'components/organisms/playground';
 
-import { projectSettingsState } from 'state/project';
 import { settingsState } from 'state/settings';
 import { userEnvState } from 'state/user';
 
@@ -29,22 +23,29 @@ type Primary = {
   main?: string;
 };
 
+type Text = {
+  primary?: string;
+  secondary?: string;
+};
+
 type ThemOverride = {
   primary?: Primary;
   background?: string;
   paper?: string;
+  text?: Text;
 };
 
 declare global {
   interface Window {
     theme?: {
+      default: string;
       light?: ThemOverride;
       dark?: ThemOverride;
     };
   }
 }
 
-function overrideTheme(theme: Theme) {
+export function overrideTheme(theme: Theme) {
   const variant = theme.palette.mode;
   const variantOverride = window?.theme?.[variant] as ThemOverride;
   if (variantOverride?.background) {
@@ -62,22 +63,31 @@ function overrideTheme(theme: Theme) {
   if (variantOverride?.primary?.light) {
     theme.palette.primary.light = variantOverride.primary.light;
   }
+  if (variantOverride?.text?.primary) {
+    theme.palette.text.primary = variantOverride.text.primary;
+  }
+  if (variantOverride?.text?.secondary) {
+    theme.palette.text.secondary = variantOverride.text.secondary;
+  }
 
   return theme;
 }
 
 function App() {
   const { theme: themeVariant } = useRecoilValue(settingsState);
-  const pSettings = useRecoilValue(projectSettingsState);
-  const theme = overrideTheme(makeTheme(themeVariant));
+  const { config } = useConfig();
+
+  // @ts-expect-error custom property
+  const fontFamily = window.theme?.font_family;
+  const theme = overrideTheme(makeTheme(themeVariant, fontFamily));
   const { isAuthenticated, accessToken } = useAuth();
   const userEnv = useRecoilValue(userEnvState);
   const { connect, chatProfile, setChatProfile } = useChatSession();
 
-  const pSettingsLoaded = !!pSettings;
+  const configLoaded = !!config;
 
-  const chatProfileOk = pSettingsLoaded
-    ? pSettings.chatProfiles.length
+  const chatProfileOk = configLoaded
+    ? config.chatProfiles.length
       ? !!chatProfile
       : true
     : false;
@@ -89,16 +99,22 @@ function App() {
       return;
     } else {
       connect({
-        wsEndpoint,
         userEnv,
         accessToken
       });
     }
   }, [userEnv, accessToken, isAuthenticated, connect, chatProfileOk]);
 
-  if (pSettingsLoaded && pSettings.chatProfiles.length && !chatProfile) {
-    // Autoselect the chat profile if there is only one
-    setChatProfile(pSettings.chatProfiles[0].name);
+  if (configLoaded && config.chatProfiles.length && !chatProfile) {
+    // Autoselect the first default chat profile
+    const defaultChatProfile = config.chatProfiles.find(
+      (profile) => profile.default
+    );
+    if (defaultChatProfile) {
+      setChatProfile(defaultChatProfile.name);
+    } else {
+      setChatProfile(config.chatProfiles[0].name);
+    }
   }
 
   return (
@@ -109,32 +125,25 @@ function App() {
         }}
       />
       <Toaster
+        className="toast"
+        position="top-right"
         toastOptions={{
-          className: 'toast',
           style: {
-            maxWidth: 500,
-            fontFamily: 'Inter',
+            fontFamily: theme.typography.fontFamily,
             background: theme.palette.background.paper,
             border: `1px solid ${theme.palette.divider}`,
-            padding: theme.spacing(1),
-            color: theme.palette.text.primary,
-            boxShadow:
-              theme.palette.mode === 'light'
-                ? '0px 2px 4px 0px #0000000D'
-                : '0px 10px 10px 0px #0000000D'
+            color: theme.palette.text.primary
           }
         }}
       />
       <Box
         display="flex"
         height="100vh"
+        maxHeight="-webkit-fill-available"
         width="100vw"
         sx={{ overflowX: 'hidden' }}
       >
-        <PromptPlayground />
         <ChatSettingsModal />
-        <Hotkeys />
-        <SettingsModal />
         <RouterProvider router={router} />
       </Box>
     </ThemeProvider>

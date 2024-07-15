@@ -1,26 +1,27 @@
-import asyncio
 from typing import Any, Dict, List, Optional
 
 from chainlit.context import context_var
 from chainlit.element import Text
-from chainlit.message import Message
-from chainlit.prompt import Prompt, PromptMessage
-from llama_index.callbacks.base import BaseCallbackHandler
-from llama_index.callbacks.schema import CBEventType, EventPayload
-from llama_index.llms.base import ChatMessage, ChatResponse, CompletionResponse
+from chainlit.step import Step, StepType
+from literalai import ChatGeneration, CompletionGeneration, GenerationMessage
+from literalai.helper import utc_now
+from llama_index.core.callbacks import TokenCountingHandler
+from llama_index.core.callbacks.schema import CBEventType, EventPayload
+from llama_index.core.llms import ChatMessage, ChatResponse, CompletionResponse
 
 DEFAULT_IGNORE = [
     CBEventType.CHUNKING,
     CBEventType.SYNTHESIZE,
     CBEventType.EMBEDDING,
     CBEventType.NODE_PARSING,
-    CBEventType.QUERY,
     CBEventType.TREE,
 ]
 
 
-class LlamaIndexCallbackHandler(BaseCallbackHandler):
+class LlamaIndexCallbackHandler(TokenCountingHandler):
     """Base callback handler that can be used to track event starts and ends."""
+
+    steps: Dict[str, Step]
 
     def __init__(
         self,
@@ -28,28 +29,20 @@ class LlamaIndexCallbackHandler(BaseCallbackHandler):
         event_ends_to_ignore: List[CBEventType] = DEFAULT_IGNORE,
     ) -> None:
         """Initialize the base callback handler."""
-        self.context = context_var.get()
-        self.event_starts_to_ignore = tuple(event_starts_to_ignore)
-        self.event_ends_to_ignore = tuple(event_ends_to_ignore)
+        super().__init__(
+            event_starts_to_ignore=event_starts_to_ignore,
+            event_ends_to_ignore=event_ends_to_ignore,
+        )
 
-    def _restore_context(self) -> None:
-        """Restore Chainlit context in the current thread
+        self.steps = {}
 
-        Chainlit context is local to the main thread, and LlamaIndex
-        runs the callbacks in its own threads, so they don't have a
-        Chainlit context by default.
-
-        This method restores the context in which the callback handler
-        has been created (it's always created in the main thread), so
-        that we can actually send messages.
-        """
-        context_var.set(self.context)
-
-    def _get_parent_id(self) -> Optional[str]:
-        """Get the parent message id"""
-        if root_message := self.context.session.root_message:
-            return root_message.id
-        return None
+    def _get_parent_id(self, event_parent_id: Optional[str] = None) -> Optional[str]:
+        if event_parent_id and event_parent_id in self.steps:
+            return event_parent_id
+        elif context_var.get().current_step:
+            return context_var.get().current_step.id
+        else:
+            return None
 
     def on_event_start(
         self,
@@ -60,15 +53,27 @@ class LlamaIndexCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> str:
         """Run when an event starts and return id of event."""
-        self._restore_context()
-        asyncio.run(
-            Message(
-                content="",
-                author=event_type,
-                parent_id=self._get_parent_id(),
-            ).send()
+        step_type: StepType = "undefined"
+        if event_type == CBEventType.RETRIEVE:
+            step_type = "tool"
+        elif event_type == CBEventType.QUERY:
+            step_type = "tool"
+        elif event_type == CBEventType.LLM:
+            step_type = "llm"
+        else:
+            return event_id
+
+        step = Step(
+            name=event_type.value,
+            type=step_type,
+            parent_id=self._get_parent_id(parent_id),
+            id=event_id,
         )
 
+        self.steps[event_id] = step
+        step.start = utc_now()
+        step.input = payload or {}
+        context_var.get().loop.create_task(step.send())
         return event_id
 
     def on_event_end(
@@ -79,33 +84,49 @@ class LlamaIndexCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         """Run when an event ends."""
-        if payload is None:
+        step = self.steps.get(event_id, None)
+
+        if payload is None or step is None:
             return
 
-        self._restore_context()
+        step.end = utc_now()
 
-        if event_type == CBEventType.RETRIEVE:
+        if event_type == CBEventType.QUERY:
+            response = payload.get(EventPayload.RESPONSE)
+            source_nodes = getattr(response, "source_nodes", None)
+            if source_nodes:
+                source_refs = ", ".join(
+                    [f"Source {idx}" for idx, _ in enumerate(source_nodes)]
+                )
+                step.elements = [
+                    Text(
+                        name=f"Source {idx}",
+                        content=source.text or "Empty node",
+                        display="side",
+                    )
+                    for idx, source in enumerate(source_nodes)
+                ]
+                step.output = f"Retrieved the following sources: {source_refs}"
+                context_var.get().loop.create_task(step.update())
+
+        elif event_type == CBEventType.RETRIEVE:
             sources = payload.get(EventPayload.NODES)
             if sources:
-                elements = [
-                    Text(name=f"Source {idx}", content=source.node.get_text())
-                    for idx, source in enumerate(sources)
-                ]
-                source_refs = "\, ".join(
+                source_refs = ", ".join(
                     [f"Source {idx}" for idx, _ in enumerate(sources)]
                 )
-                content = f"Retrieved the following sources: {source_refs}"
+                step.elements = [
+                    Text(
+                        name=f"Source {idx}",
+                        display="side",
+                        content=source.node.get_text() or "Empty node",
+                    )
+                    for idx, source in enumerate(sources)
+                ]
+                step.output = f"Retrieved the following sources: {source_refs}"
+            context_var.get().loop.create_task(step.update())
 
-                asyncio.run(
-                    Message(
-                        content=content,
-                        author=event_type,
-                        elements=elements,
-                        parent_id=self._get_parent_id(),
-                    ).send()
-                )
-
-        if event_type == CBEventType.LLM:
+        elif event_type == CBEventType.LLM:
             formatted_messages = payload.get(
                 EventPayload.MESSAGES
             )  # type: Optional[List[ChatMessage]]
@@ -114,7 +135,9 @@ class LlamaIndexCallbackHandler(BaseCallbackHandler):
 
             if formatted_messages:
                 messages = [
-                    PromptMessage(role=m.role.value, formatted=m.content)  # type: ignore[arg-type]
+                    GenerationMessage(
+                        role=m.role.value, content=m.content or ""  # type: ignore
+                    )
                     for m in formatted_messages
                 ]
             else:
@@ -127,18 +150,38 @@ class LlamaIndexCallbackHandler(BaseCallbackHandler):
             else:
                 content = ""
 
-            asyncio.run(
-                Message(
-                    content=content,
-                    author=event_type,
-                    parent_id=self._get_parent_id(),
-                    prompt=Prompt(
-                        formatted=formatted_prompt,
-                        messages=messages,
-                        completion=content,
+            step.output = content
+
+            token_count = self.total_llm_token_count or None
+            raw_response = response.raw if response else None
+            model = raw_response.get("model", None) if raw_response else None
+
+            if messages and isinstance(response, ChatResponse):
+                msg: ChatMessage = response.message
+                step.generation = ChatGeneration(
+                    model=model,
+                    messages=messages,
+                    message_completion=GenerationMessage(
+                        role=msg.role.value,  # type: ignore
+                        content=content,
                     ),
-                ).send()
-            )
+                    token_count=token_count,
+                )
+            elif formatted_prompt:
+                step.generation = CompletionGeneration(
+                    model=model,
+                    prompt=formatted_prompt,
+                    completion=content,
+                    token_count=token_count,
+                )
+
+            context_var.get().loop.create_task(step.update())
+
+        else:
+            step.output = payload
+            context_var.get().loop.create_task(step.update())
+
+        self.steps.pop(event_id, None)
 
     def _noop(self, *args, **kwargs):
         pass

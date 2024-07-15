@@ -1,12 +1,25 @@
 import asyncio
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Literal, Optional, Union, cast
 
-from chainlit.client.base import ConversationDict, MessageDict
-from chainlit.element import Element
+from chainlit.chat_context import chat_context
+from chainlit.config import config
+from chainlit.data import get_data_layer
+from chainlit.element import Element, ElementDict, File
+from chainlit.logger import logger
 from chainlit.message import Message
 from chainlit.session import BaseSession, WebsocketSession
-from chainlit.types import AskSpec, UIMessagePayload
+from chainlit.step import StepDict
+from chainlit.types import (
+    AskActionResponse,
+    AskSpec,
+    FileDict,
+    FileReference,
+    MessagePayload,
+    ThreadDict,
+)
+from chainlit.user import PersistedUser
+from literalai.helper import utc_now
 from socketio.exceptions import TimeoutError
 
 
@@ -17,6 +30,7 @@ class BaseChainlitEmitter:
     """
 
     session: BaseSession
+    enabled: bool = True
 
     def __init__(self, session: BaseSession) -> None:
         """Initialize with the user session."""
@@ -26,44 +40,54 @@ class BaseChainlitEmitter:
         """Stub method to get the 'emit' property from the session."""
         pass
 
-    async def ask_user(self):
-        """Stub method to get the 'ask_user' property from the session."""
+    async def emit_call(self):
+        """Stub method to get the 'emit_call' property from the session."""
         pass
 
-    async def resume_conversation(self, conv_dict: ConversationDict):
-        """Stub method to resume a conversation."""
+    async def resume_thread(self, thread_dict: ThreadDict):
+        """Stub method to resume a thread."""
         pass
 
-    async def send_message(self, msg_dict: dict):
+    async def send_element(self, element_dict: ElementDict):
+        """Stub method to send an element to the UI."""
+        pass
+
+    async def send_step(self, step_dict: StepDict):
         """Stub method to send a message to the UI."""
         pass
 
-    async def update_message(self, msg_dict: dict):
+    async def update_step(self, step_dict: StepDict):
         """Stub method to update a message in the UI."""
         pass
 
-    async def delete_message(self, msg_dict: dict):
+    async def delete_step(self, step_dict: StepDict):
         """Stub method to delete a message in the UI."""
         pass
 
-    async def send_ask_timeout(self):
-        """Stub method to send a prompt timeout message to the UI."""
+    def send_timeout(self, event: Literal["ask_timeout", "call_fn_timeout"]):
+        """Stub method to send a timeout to the UI."""
         pass
 
-    async def clear_ask(self):
-        """Stub method to clear the prompt from the UI."""
+    def clear(self, event: Literal["clear_ask", "clear_call_fn"]):
         pass
 
-    async def init_conversation(self, msg_dict: MessageDict):
-        """Signal the UI that a new conversation (with a user message) exists"""
+    async def init_thread(self, interaction: str):
         pass
 
-    async def process_user_message(self, payload: UIMessagePayload) -> Message:
+    async def process_message(self, payload: MessagePayload) -> Message:
         """Stub method to process user message."""
         return Message(content="")
 
-    async def send_ask_user(self, msg_dict: dict, spec, raise_on_timeout=False):
+    async def send_ask_user(
+        self, step_dict: StepDict, spec: AskSpec, raise_on_timeout=False
+    ) -> Optional[Union["StepDict", "AskActionResponse", List["FileDict"]]]:
         """Stub method to send a prompt to the UI and wait for a response."""
+        pass
+
+    async def send_call_fn(
+        self, name: str, args: Dict[str, Any], timeout=300, raise_on_timeout=False
+    ) -> Optional[Dict[str, Any]]:
+        """Stub method to send a call function event to the copilot and wait for a response."""
         pass
 
     async def update_token_count(self, count: int):
@@ -78,16 +102,22 @@ class BaseChainlitEmitter:
         """Stub method to send a task end signal to the UI."""
         pass
 
-    async def stream_start(self, msg_dict: dict):
+    async def stream_start(self, step_dict: StepDict):
         """Stub method to send a stream start signal to the UI."""
         pass
 
-    async def send_token(self, id: str, token: str, is_sequence=False):
+    async def send_token(self, id: str, token: str, is_sequence=False, is_input=False):
         """Stub method to send a message token to the UI."""
         pass
 
     async def set_chat_settings(self, settings: dict):
         """Stub method to set chat settings."""
+        pass
+
+    async def send_action_response(
+        self, id: str, status: bool, response: Optional[str] = None
+    ):
+        """Send an action response to the UI."""
         pass
 
 
@@ -119,54 +149,90 @@ class ChainlitEmitter(BaseChainlitEmitter):
         return self._get_session_property("emit")
 
     @property
-    def ask_user(self):
-        """Get the 'ask_user' property from the session."""
-        return self._get_session_property("ask_user")
+    def emit_call(self):
+        """Get the 'emit_call' property from the session."""
+        return self._get_session_property("emit_call")
 
-    def resume_conversation(self, conv_dict: ConversationDict):
-        """Send a conversation to the UI to resume it"""
-        return self.emit("resume_conversation", conv_dict)
+    def resume_thread(self, thread_dict: ThreadDict):
+        """Send a thread to the UI to resume it"""
+        return self.emit("resume_thread", thread_dict)
 
-    def send_message(self, msg_dict: Dict):
+    async def send_element(self, element_dict: ElementDict):
+        """Stub method to send an element to the UI."""
+        await self.emit("element", element_dict)
+
+    def send_step(self, step_dict: StepDict):
         """Send a message to the UI."""
-        return self.emit("new_message", msg_dict)
+        return self.emit("new_message", step_dict)
 
-    def update_message(self, msg_dict: Dict):
+    def update_step(self, step_dict: StepDict):
         """Update a message in the UI."""
+        return self.emit("update_message", step_dict)
 
-        return self.emit("update_message", msg_dict)
-
-    def delete_message(self, msg_dict):
+    def delete_step(self, step_dict: StepDict):
         """Delete a message in the UI."""
+        return self.emit("delete_message", step_dict)
 
-        return self.emit("delete_message", msg_dict)
+    def send_timeout(self, event: Literal["ask_timeout", "call_fn_timeout"]):
+        return self.emit(event, {})
 
-    def send_ask_timeout(self):
-        """Send a prompt timeout message to the UI."""
+    def clear(self, event: Literal["clear_ask", "clear_call_fn"]):
+        return self.emit(event, {})
 
-        return self.emit("ask_timeout", {})
+    async def flush_thread_queues(self, interaction: str):
+        if data_layer := get_data_layer():
+            if isinstance(self.session.user, PersistedUser):
+                user_id = self.session.user.id
+            else:
+                user_id = None
+            try:
+                should_tag_thread = (
+                    self.session.chat_profile and config.features.auto_tag_thread
+                )
+                tags = [self.session.chat_profile] if should_tag_thread else None
+                await data_layer.update_thread(
+                    thread_id=self.session.thread_id,
+                    name=interaction,
+                    user_id=user_id,
+                    tags=tags,
+                )
+            except Exception as e:
+                logger.error(f"Error updating thread: {e}")
+            asyncio.create_task(self.session.flush_method_queue())
 
-    def clear_ask(self):
-        """Clear the prompt from the UI."""
+    async def init_thread(self, interaction: str):
+        await self.flush_thread_queues(interaction)
+        await self.emit(
+            "first_interaction",
+            {
+                "interaction": interaction,
+                "thread_id": self.session.thread_id,
+            },
+        )
 
-        return self.emit("clear_ask", {})
+    async def process_message(self, payload: MessagePayload):
+        step_dict = payload["message"]
+        file_refs = payload.get("fileReferences")
+        # UUID generated by the frontend should use v4
+        assert uuid.UUID(step_dict["id"]).version == 4
 
-    def init_conversation(self, message: MessageDict):
-        """Signal the UI that a new conversation (with a user message) exists"""
-
-        return self.emit("init_conversation", message)
-
-    async def process_user_message(self, payload: UIMessagePayload):
-        message_dict = payload["message"]
-        files = payload["files"]
-        # Temporary UUID generated by the frontend should use v4
-        assert uuid.UUID(message_dict["id"]).version == 4
-
-        message = Message.from_dict(message_dict)
+        message = Message.from_dict(step_dict)
+        # Overwrite the created_at timestamp with the current time
+        message.created_at = utc_now()
+        chat_context.add(message)
 
         asyncio.create_task(message._create())
 
-        if files:
+        if not self.session.has_first_interaction:
+            self.session.has_first_interaction = True
+            asyncio.create_task(self.init_thread(message.content))
+
+        if file_refs:
+            files = [
+                self.session.files[file["id"]]
+                for file in file_refs
+                if file["id"] in self.session.files
+            ]
             file_elements = [Element.from_dict(file) for file in files]
             message.elements = file_elements
 
@@ -176,45 +242,92 @@ class ChainlitEmitter(BaseChainlitEmitter):
 
             asyncio.create_task(send_elements())
 
-        if not self.session.has_user_message:
-            self.session.has_user_message = True
-            await self.init_conversation(await message.with_conversation_id())
-
-        self.session.root_message = message
-
         return message
 
     async def send_ask_user(
-        self, msg_dict: Dict, spec: AskSpec, raise_on_timeout=False
+        self, step_dict: StepDict, spec: AskSpec, raise_on_timeout=False
     ):
         """Send a prompt to the UI and wait for a response."""
 
         try:
             # Send the prompt to the UI
-            res = await self.ask_user(
-                {"msg": msg_dict, "spec": spec.to_dict()}, spec.timeout
-            )  # type: Optional["MessageDict"]
+            user_res = await self.emit_call(
+                "ask", {"msg": step_dict, "spec": spec.to_dict()}, spec.timeout
+            )  # type: Optional[Union["StepDict", "AskActionResponse", List["FileReference"]]]
 
             # End the task temporarily so that the User can answer the prompt
             await self.task_end()
 
-            if res:
-                # If cloud is enabled, store the response in the database/S3
-                if spec.type == "text":
-                    await self.process_user_message({"message": res, "files": None})
-                elif spec.type == "file":
-                    # TODO: upload file to S3
-                    pass
+            final_res: Optional[
+                Union["StepDict", "AskActionResponse", List["FileDict"]]
+            ] = None
 
-            await self.clear_ask()
-            return res
+            if user_res:
+                interaction: Union[str, None] = None
+                if spec.type == "text":
+                    message_dict_res = cast(StepDict, user_res)
+                    await self.process_message(
+                        {"message": message_dict_res, "fileReferences": None}
+                    )
+                    interaction = message_dict_res["output"]
+                    final_res = message_dict_res
+                elif spec.type == "file":
+                    file_refs = cast(List[FileReference], user_res)
+                    files = [
+                        self.session.files[file["id"]]
+                        for file in file_refs
+                        if file["id"] in self.session.files
+                    ]
+                    final_res = files
+                    interaction = ",".join([file["name"] for file in files])
+                    if get_data_layer():
+                        coros = [
+                            File(
+                                name=file["name"],
+                                path=str(file["path"]),
+                                mime=file["type"],
+                                chainlit_key=file["id"],
+                                for_id=step_dict["id"],
+                            )._create()
+                            for file in files
+                        ]
+                        await asyncio.gather(*coros)
+                elif spec.type == "action":
+                    action_res = cast(AskActionResponse, user_res)
+                    final_res = action_res
+                    interaction = action_res["value"]
+
+                if not self.session.has_first_interaction and interaction:
+                    self.session.has_first_interaction = True
+                    await self.init_thread(interaction=interaction)
+
+            await self.clear("clear_ask")
+            return final_res
         except TimeoutError as e:
-            await self.send_ask_timeout()
+            await self.send_timeout("ask_timeout")
 
             if raise_on_timeout:
                 raise e
         finally:
             await self.task_start()
+
+    async def send_call_fn(
+        self, name: str, args: Dict[str, Any], timeout=300, raise_on_timeout=False
+    ) -> Optional[Dict[str, Any]]:
+        """Stub method to send a call function event to the copilot and wait for a response."""
+        try:
+            call_fn_res = await self.emit_call(
+                "call_fn", {"name": name, "args": args}, timeout
+            )  # type: Dict
+
+            await self.clear("clear_call_fn")
+            return call_fn_res
+        except TimeoutError as e:
+            await self.send_timeout("call_fn_timeout")
+
+            if raise_on_timeout:
+                raise e
+            return None
 
     def update_token_count(self, count: int):
         """Update the token count for the UI."""
@@ -231,18 +344,26 @@ class ChainlitEmitter(BaseChainlitEmitter):
         """Send a task end signal to the UI."""
         return self.emit("task_end", {})
 
-    def stream_start(self, msg_dict: Dict):
+    def stream_start(self, step_dict: StepDict):
         """Send a stream start signal to the UI."""
         return self.emit(
             "stream_start",
-            msg_dict,
+            step_dict,
         )
 
-    def send_token(self, id: str, token: str, is_sequence=False):
+    def send_token(self, id: str, token: str, is_sequence=False, is_input=False):
         """Send a message token to the UI."""
         return self.emit(
-            "stream_token", {"id": id, "token": token, "isSequence": is_sequence}
+            "stream_token",
+            {"id": id, "token": token, "isSequence": is_sequence, "isInput": is_input},
         )
 
     def set_chat_settings(self, settings: Dict[str, Any]):
         self.session.chat_settings = settings
+
+    def send_action_response(
+        self, id: str, status: bool, response: Optional[str] = None
+    ):
+        return self.emit(
+            "action_response", {"id": id, "status": status, "response": response}
+        )

@@ -1,7 +1,11 @@
+import { useMemo } from 'react';
+import { grey } from 'theme';
+
 import { Box, Chip, List, Theme, useTheme } from '@mui/material';
 
-import { useChatData } from '@chainlit/react-client';
-import { grey } from '@chainlit/react-components/theme';
+import { useApi, useChatData } from '@chainlit/react-client';
+
+import { Translator } from 'components/i18n';
 
 import { ITaskList, Task } from './Task';
 
@@ -17,9 +21,14 @@ const Header = ({ status }: { status: string }) => {
       }}
     >
       <Box
-        sx={{ flexGrow: '1', fontWeight: '600', paddingLeft: theme.spacing(1) }}
+        sx={{
+          flexGrow: '1',
+          fontWeight: '600',
+          paddingLeft: theme.spacing(1),
+          fontFamily: theme.typography.fontFamily
+        }}
       >
-        🗒️ Task List
+        <Translator path="components.molecules.tasklist.TaskList.title" />
       </Box>
       <Chip
         label={status || '?'}
@@ -40,6 +49,7 @@ const taskListContainerStyles = (theme: Theme) => ({
   width: '100%',
   display: 'flex',
   flexDirection: 'column',
+  fontFamily: theme.typography.fontFamily!,
   boxShadow:
     theme.palette.mode === 'dark'
       ? '0px 4px 20px 0px rgba(0, 0, 0, 0.20)'
@@ -50,17 +60,37 @@ const TaskList = ({ isMobile }: { isMobile: boolean }) => {
   const theme = useTheme();
   const { tasklists } = useChatData();
 
-  let content: ITaskList | null = null;
   const tasklist = tasklists[tasklists.length - 1];
 
-  try {
-    if (tasklist?.content) {
-      content = JSON.parse(tasklist.content);
-    }
-  } catch (e) {
-    console.error(e);
-    content = null;
+  // We remove the base URL since the useApi hook is already set with a base URL.
+  // This ensures we only pass the relative path and search parameters to the hook.
+  const url = useMemo(() => {
+    if (!tasklist?.url) return null;
+    const parsedUrl = new URL(tasklist.url);
+    return parsedUrl.pathname + parsedUrl.search;
+  }, [tasklist?.url]);
+
+  const { isLoading, error, data } = useApi<ITaskList>(url ? url : null, {
+    keepPreviousData: true
+  });
+
+  if (!url) return null;
+
+  if (isLoading && !data) {
+    return (
+      <div>
+        <Translator path="components.molecules.tasklist.TaskList.loading" />
+      </div>
+    );
+  } else if (error) {
+    return (
+      <div>
+        <Translator path="components.molecules.tasklist.TaskList.error" />
+      </div>
+    );
   }
+
+  const content = data as ITaskList;
 
   if (!content) {
     return null;

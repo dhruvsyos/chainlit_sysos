@@ -1,5 +1,5 @@
-import debounce from 'lodash/debounce';
-import { useCallback } from 'react';
+import { debounce } from 'lodash';
+import { useCallback, useContext } from 'react';
 import {
   useRecoilState,
   useRecoilValue,
@@ -10,28 +10,28 @@ import io from 'socket.io-client';
 import {
   actionState,
   askUserState,
-  avatarState,
+  callFnState,
   chatProfileState,
   chatSettingsInputsState,
   chatSettingsValueState,
-  conversationIdToResumeState,
+  currentThreadIdState,
   elementState,
-  firstUserMessageState,
+  firstUserInteraction,
   loadingState,
   messagesState,
   sessionIdState,
   sessionState,
   tasklistState,
+  threadIdToResumeState,
   tokenCountState
 } from 'src/state';
 import {
   IAction,
-  IAvatarElement,
-  IConversation,
   IElement,
-  IMessage,
   IMessageElement,
-  ITasklistElement
+  IStep,
+  ITasklistElement,
+  IThread
 } from 'src/types';
 import {
   addMessage,
@@ -40,45 +40,56 @@ import {
   updateMessageContentById
 } from 'src/utils/message';
 
-import type { IMessageUpdate, IToken } from './useChatData';
+import { ChainlitContext } from './context';
+import type { IToken } from './useChatData';
 
 const useChatSession = () => {
+  const client = useContext(ChainlitContext);
   const sessionId = useRecoilValue(sessionIdState);
 
   const [session, setSession] = useRecoilState(sessionState);
 
   const resetChatSettingsValue = useResetRecoilState(chatSettingsValueState);
-  const setFirstUserMessage = useSetRecoilState(firstUserMessageState);
+  const setFirstUserInteraction = useSetRecoilState(firstUserInteraction);
   const setLoading = useSetRecoilState(loadingState);
   const setMessages = useSetRecoilState(messagesState);
   const setAskUser = useSetRecoilState(askUserState);
+  const setCallFn = useSetRecoilState(callFnState);
+
   const setElements = useSetRecoilState(elementState);
-  const setAvatars = useSetRecoilState(avatarState);
   const setTasklists = useSetRecoilState(tasklistState);
   const setActions = useSetRecoilState(actionState);
   const setChatSettingsInputs = useSetRecoilState(chatSettingsInputsState);
   const setTokenCount = useSetRecoilState(tokenCountState);
   const [chatProfile, setChatProfile] = useRecoilState(chatProfileState);
-  const idToResume = useRecoilValue(conversationIdToResumeState);
-
+  const idToResume = useRecoilValue(threadIdToResumeState);
+  const setCurrentThreadId = useSetRecoilState(currentThreadIdState);
   const _connect = useCallback(
     ({
-      wsEndpoint,
       userEnv,
       accessToken
     }: {
-      wsEndpoint: string;
       userEnv: Record<string, string>;
       accessToken?: string;
     }) => {
-      const socket = io(wsEndpoint, {
-        path: '/ws/socket.io',
+      const { protocol, host, pathname } = new URL(client.httpEndpoint);
+      const uri = `${protocol}//${host}`;
+      const path =
+        pathname && pathname !== '/'
+          ? `${pathname}/ws/socket.io`
+          : '/ws/socket.io';
+
+      const socket = io(uri, {
+        path,
         extraHeaders: {
           Authorization: accessToken || '',
+          'X-Chainlit-Client-Type': client.type,
           'X-Chainlit-Session-Id': sessionId,
-          'X-Chainlit-Conversation-Id': idToResume || '',
+          'X-Chainlit-Thread-Id': idToResume || '',
           'user-env': JSON.stringify(userEnv),
-          'X-Chainlit-Chat-Profile': chatProfile || ''
+          'X-Chainlit-Chat-Profile': chatProfile
+            ? encodeURIComponent(chatProfile)
+            : ''
         }
       });
       setSession((old) => {
@@ -111,61 +122,68 @@ const useChatSession = () => {
         window.location.reload();
       });
 
-      socket.on('resume_conversation', (conversation: IConversation) => {
-        let messages: IMessage[] = [];
-        for (const message of conversation.messages) {
-          messages = addMessage(messages, message);
+      socket.on('resume_thread', (thread: IThread) => {
+        let messages: IStep[] = [];
+        for (const step of thread.steps) {
+          messages = addMessage(messages, step);
         }
-        if (conversation.metadata?.chat_profile) {
-          setChatProfile(conversation.metadata?.chat_profile);
+        if (thread.metadata?.chat_profile) {
+          setChatProfile(thread.metadata?.chat_profile);
         }
         setMessages(messages);
-        setAvatars(
-          (conversation.elements as IAvatarElement[]).filter(
-            (e) => e.type === 'avatar'
-          )
-        );
+        const elements = thread.elements || [];
         setTasklists(
-          (conversation.elements as ITasklistElement[]).filter(
-            (e) => e.type === 'tasklist'
-          )
+          (elements as ITasklistElement[]).filter((e) => e.type === 'tasklist')
         );
         setElements(
-          (conversation.elements as IMessageElement[]).filter(
+          (elements as IMessageElement[]).filter(
             (e) => ['avatar', 'tasklist'].indexOf(e.type) === -1
           )
         );
       });
 
-      socket.on('new_message', (message: IMessage) => {
+      socket.on('new_message', (message: IStep) => {
         setMessages((oldMessages) => addMessage(oldMessages, message));
       });
 
-      socket.on('init_conversation', (message: IMessage) => {
-        setFirstUserMessage(message);
-      });
+      socket.on(
+        'first_interaction',
+        (event: { interaction: string; thread_id: string }) => {
+          setFirstUserInteraction(event.interaction);
+          setCurrentThreadId(event.thread_id);
+        }
+      );
 
-      socket.on('update_message', (message: IMessageUpdate) => {
+      socket.on('update_message', (message: IStep) => {
         setMessages((oldMessages) =>
           updateMessageById(oldMessages, message.id, message)
         );
       });
 
-      socket.on('delete_message', (message: IMessage) => {
+      socket.on('delete_message', (message: IStep) => {
         setMessages((oldMessages) =>
           deleteMessageById(oldMessages, message.id)
         );
       });
 
-      socket.on('stream_start', (message: IMessage) => {
+      socket.on('stream_start', (message: IStep) => {
         setMessages((oldMessages) => addMessage(oldMessages, message));
       });
 
-      socket.on('stream_token', ({ id, token, isSequence }: IToken) => {
-        setMessages((oldMessages) =>
-          updateMessageContentById(oldMessages, id, token, isSequence)
-        );
-      });
+      socket.on(
+        'stream_token',
+        ({ id, token, isSequence, isInput }: IToken) => {
+          setMessages((oldMessages) =>
+            updateMessageContentById(
+              oldMessages,
+              id,
+              token,
+              isSequence,
+              isInput
+            )
+          );
+        }
+      );
 
       socket.on('ask', ({ msg, spec }, callback) => {
         setAskUser({ spec, callback });
@@ -183,46 +201,54 @@ const useChatSession = () => {
         setAskUser(undefined);
       });
 
+      socket.on('call_fn', ({ name, args }, callback) => {
+        setCallFn({ name, args, callback });
+      });
+
+      socket.on('clear_call_fn', () => {
+        setCallFn(undefined);
+      });
+
+      socket.on('call_fn_timeout', () => {
+        setCallFn(undefined);
+      });
+
       socket.on('chat_settings', (inputs: any) => {
         setChatSettingsInputs(inputs);
         resetChatSettingsValue();
       });
 
       socket.on('element', (element: IElement) => {
-        if (element.type === 'avatar') {
-          setAvatars((old) => [...old, element]);
-        } else if (element.type === 'tasklist') {
-          setTasklists((old) => [...old, element]);
-        } else {
-          setElements((old) => [...old, element]);
+        if (!element.url && element.chainlitKey) {
+          element.url = client.getElementUrl(element.chainlitKey, sessionId);
         }
-      });
 
-      socket.on(
-        'update_element',
-        (update: { id: string; forIds: string[] }) => {
+        if (element.type === 'tasklist') {
+          setTasklists((old) => {
+            const index = old.findIndex((e) => e.id === element.id);
+            if (index === -1) {
+              return [...old, element];
+            } else {
+              return [...old.slice(0, index), element, ...old.slice(index + 1)];
+            }
+          });
+        } else {
           setElements((old) => {
-            const index = old.findIndex((e) => e.id === update.id);
-            if (index === -1) return old;
-            const element = old[index];
-            const newElement = { ...element, forIds: update.forIds };
-            return [
-              ...old.slice(0, index),
-              newElement,
-              ...old.slice(index + 1)
-            ];
+            const index = old.findIndex((e) => e.id === element.id);
+            if (index === -1) {
+              return [...old, element];
+            } else {
+              return [...old.slice(0, index), element, ...old.slice(index + 1)];
+            }
           });
         }
-      );
+      });
 
       socket.on('remove_element', (remove: { id: string }) => {
         setElements((old) => {
           return old.filter((e) => e.id !== remove.id);
         });
         setTasklists((old) => {
-          return old.filter((e) => e.id !== remove.id);
-        });
-        setAvatars((old) => {
           return old.filter((e) => e.id !== remove.id);
         });
       });
@@ -255,7 +281,15 @@ const useChatSession = () => {
     }
   }, [session]);
 
-  return { connect, disconnect, chatProfile, setChatProfile };
+  return {
+    connect,
+    disconnect,
+    session,
+    sessionId,
+    chatProfile,
+    idToResume,
+    setChatProfile
+  };
 };
 
 export { useChatSession };

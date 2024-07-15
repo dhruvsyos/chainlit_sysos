@@ -1,42 +1,102 @@
+import { useCallback, useContext } from 'react';
+import { useRecoilValue, useSetRecoilState } from 'recoil';
+import { toast } from 'sonner';
+
 import {
+  ChainlitContext,
+  IFeedback,
+  IStep,
+  accessTokenState,
+  messagesState,
+  updateMessageById,
   useChatData,
   useChatInteract,
   useChatMessages
 } from '@chainlit/react-client';
 
-import { IProjectSettings } from 'state/project';
+import { useTranslation } from 'components/i18n/Translator';
 
 import MessageContainer from './container';
-import WelcomeScreen from './welcomeScreen';
 
-interface MessagesProps {
-  autoScroll: boolean;
-  projectSettings?: IProjectSettings;
-  setAutoScroll: (autoScroll: boolean) => void;
-}
-
-const Messages = ({
-  autoScroll,
-  projectSettings,
-  setAutoScroll
-}: MessagesProps): JSX.Element => {
-  const { elements, askUser, avatars, loading, actions } = useChatData();
+const Messages = (): JSX.Element => {
+  const apiClient = useContext(ChainlitContext);
+  const { elements, askUser, loading, actions } = useChatData();
   const { messages } = useChatMessages();
   const { callAction } = useChatInteract();
+  const accessToken = useRecoilValue(accessTokenState);
+  const setMessages = useSetRecoilState(messagesState);
 
-  return !messages.length && projectSettings?.ui.show_readme_as_default ? (
-    <WelcomeScreen markdown={projectSettings?.markdown} />
-  ) : (
+  const { t } = useTranslation();
+
+  const onFeedbackUpdated = useCallback(
+    async (message: IStep, onSuccess: () => void, feedback: IFeedback) => {
+      try {
+        toast.promise(apiClient.setFeedback(feedback, accessToken), {
+          loading: t('components.organisms.chat.Messages.index.updating'),
+          success: (res) => {
+            setMessages((prev) =>
+              updateMessageById(prev, message.id, {
+                ...message,
+                feedback: {
+                  ...feedback,
+                  id: res.feedbackId
+                }
+              })
+            );
+            onSuccess();
+            return t(
+              'components.organisms.chat.Messages.index.feedbackUpdated'
+            );
+          },
+          error: (err) => {
+            return <span>{err.message}</span>;
+          }
+        });
+      } catch (err) {
+        console.log(err);
+      }
+    },
+    []
+  );
+
+  const onFeedbackDeleted = useCallback(
+    async (message: IStep, onSuccess: () => void, feedbackId: string) => {
+      try {
+        toast.promise(apiClient.deleteFeedback(feedbackId, accessToken), {
+          loading: t('components.organisms.chat.Messages.index.updating'),
+          success: () => {
+            setMessages((prev) =>
+              updateMessageById(prev, message.id, {
+                ...message,
+                feedback: undefined
+              })
+            );
+            onSuccess();
+            return t(
+              'components.organisms.chat.Messages.index.feedbackUpdated'
+            );
+          },
+          error: (err) => {
+            return <span>{err.message}</span>;
+          }
+        });
+      } catch (err) {
+        console.log(err);
+      }
+    },
+    []
+  );
+
+  return (
     <MessageContainer
-      avatars={avatars}
       loading={loading}
       askUser={askUser}
       actions={actions}
       elements={elements}
       messages={messages}
-      autoScroll={autoScroll}
+      onFeedbackUpdated={onFeedbackUpdated}
+      onFeedbackDeleted={onFeedbackDeleted}
       callAction={callAction}
-      setAutoScroll={setAutoScroll}
     />
   );
 };

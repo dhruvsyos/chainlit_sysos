@@ -1,10 +1,9 @@
 import { useRecoilValue } from 'recoil';
-import { IMessage } from 'src/types';
 
 import {
   actionState,
   askUserState,
-  avatarState,
+  callFnState,
   chatSettingsDefaultValueSelector,
   chatSettingsInputsState,
   chatSettingsValueState,
@@ -14,24 +13,21 @@ import {
   tasklistState
 } from './state';
 
-export interface IMessageUpdate extends IMessage {
-  newId?: string;
-}
-
 export interface IToken {
   id: number | string;
   token: string;
   isSequence: boolean;
+  isInput: boolean;
 }
 
 const useChatData = () => {
   const loading = useRecoilValue(loadingState);
   const elements = useRecoilValue(elementState);
-  const avatars = useRecoilValue(avatarState);
   const tasklists = useRecoilValue(tasklistState);
   const actions = useRecoilValue(actionState);
   const session = useRecoilValue(sessionState);
   const askUser = useRecoilValue(askUserState);
+  const callFn = useRecoilValue(callFnState);
   const chatSettingsInputs = useRecoilValue(chatSettingsInputsState);
   const chatSettingsValue = useRecoilValue(chatSettingsValueState);
   const chatSettingsDefaultValue = useRecoilValue(
@@ -48,7 +44,7 @@ const useChatData = () => {
   return {
     actions,
     askUser,
-    avatars,
+    callFn,
     chatSettingsDefaultValue,
     chatSettingsInputs,
     chatSettingsValue,

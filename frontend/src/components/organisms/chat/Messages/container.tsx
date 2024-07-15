@@ -1,137 +1,68 @@
-import { apiClient } from 'api';
 import { memo, useCallback, useMemo } from 'react';
-import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import { useRecoilValue, useSetRecoilState } from 'recoil';
+import { toast } from 'sonner';
 
 import {
   IAction,
   IAsk,
-  IAvatarElement,
-  IFunction,
-  IMessage,
+  IFeedback,
   IMessageElement,
-  ITool,
-  accessTokenState,
-  messagesState,
-  updateMessageById
+  IStep,
+  sideViewState,
+  useChatInteract,
+  useConfig
 } from '@chainlit/react-client';
-import { MessageContainer as CMessageContainer } from '@chainlit/react-components';
 
-import { playgroundState } from 'state/playground';
-import { highlightMessage, sideViewState } from 'state/project';
-import { projectSettingsState } from 'state/project';
-import { settingsState } from 'state/settings';
+import { MessageContainer as CMessageContainer } from 'components/molecules/messages/MessageContainer';
+
+import { highlightMessage } from 'state/project';
 
 interface Props {
   loading: boolean;
   actions: IAction[];
   elements: IMessageElement[];
-  avatars: IAvatarElement[];
-  messages: IMessage[];
+  messages: IStep[];
   askUser?: IAsk;
-  autoScroll?: boolean;
+  onFeedbackUpdated: (
+    message: IStep,
+    onSuccess: () => void,
+    feedback: IFeedback
+  ) => void;
+  onFeedbackDeleted: (
+    message: IStep,
+    onSuccess: () => void,
+    feedback: string
+  ) => void;
   callAction?: (action: IAction) => void;
-  setAutoScroll?: (autoScroll: boolean) => void;
 }
 
 const MessageContainer = memo(
   ({
     askUser,
     loading,
-    avatars,
     actions,
-    autoScroll,
     elements,
     messages,
-    callAction,
-    setAutoScroll
+    onFeedbackUpdated,
+    onFeedbackDeleted,
+    callAction
   }: Props) => {
-    const accessToken = useRecoilValue(accessTokenState);
-    const appSettings = useRecoilValue(settingsState);
-    const projectSettings = useRecoilValue(projectSettingsState);
-    const setPlayground = useSetRecoilState(playgroundState);
-    const setMessages = useSetRecoilState(messagesState);
+    const { config } = useConfig();
     const setSideView = useSetRecoilState(sideViewState);
     const highlightedMessage = useRecoilValue(highlightMessage);
+    const { uploadFile: _uploadFile } = useChatInteract();
 
-    const enableFeedback = !!projectSettings?.dataPersistence;
+    const uploadFile = useCallback(
+      (file: File, onProgress: (progress: number) => void) => {
+        return _uploadFile(file, onProgress);
+      },
+      [_uploadFile]
+    );
+
+    const enableFeedback = !!config?.dataPersistence;
 
     const navigate = useNavigate();
-
-    const onPlaygroundButtonClick = useCallback(
-      (message: IMessage) => {
-        setPlayground((old) => {
-          let functions =
-            (message.prompt?.settings?.functions as unknown as IFunction[]) ||
-            [];
-          const tools =
-            (message.prompt?.settings?.tools as unknown as ITool[]) || [];
-          if (tools.length) {
-            functions = [
-              ...functions,
-              ...tools
-                .filter((t) => t.type === 'function')
-                .map((t) => t.function)
-            ];
-          }
-          return {
-            ...old,
-            prompt: message.prompt
-              ? {
-                  ...message.prompt,
-                  functions
-                }
-              : undefined,
-            originalPrompt: message.prompt
-              ? {
-                  ...message.prompt,
-                  functions
-                }
-              : undefined
-          };
-        });
-      },
-      [setPlayground]
-    );
-
-    const onFeedbackUpdated = useCallback(
-      async (
-        message: IMessage,
-        feedback: number,
-        onSuccess: () => void,
-        feedbackComment?: string
-      ) => {
-        try {
-          await toast.promise(
-            apiClient.setHumanFeedback(
-              message.id,
-              feedback,
-              feedbackComment,
-              accessToken
-            ),
-            {
-              loading: 'Updating...',
-              success: 'Feedback updated!',
-              error: (err) => {
-                return <span>{err.message}</span>;
-              }
-            }
-          );
-          setMessages((prev) =>
-            updateMessageById(prev, message.id, {
-              ...message,
-              humanFeedback: feedback,
-              humanFeedbackComment: feedbackComment
-            })
-          );
-          onSuccess();
-        } catch (err) {
-          console.log(err);
-        }
-      },
-      []
-    );
 
     const onElementRefClick = useCallback(
       (element: IMessageElement) => {
@@ -142,8 +73,8 @@ const MessageContainer = memo(
           return;
         }
 
-        if (element.conversationId) {
-          path += `?conversation=${element.conversationId}`;
+        if (element.threadId) {
+          path += `?thread=${element.threadId}`;
         }
 
         return navigate(element.display === 'page' ? path : '#');
@@ -174,34 +105,30 @@ const MessageContainer = memo(
     // This prevents unnecessary re-renders of children components when no props have changed.
     const memoizedContext = useMemo(() => {
       return {
+        uploadFile,
         askUser,
-        avatars,
-        defaultCollapseContent: appSettings.defaultCollapseContent,
-        expandAll: appSettings.expandAll,
-        hideCot: appSettings.hideCot,
+        allowHtml: config?.features?.unsafe_allow_html,
+        latex: config?.features?.latex,
+        defaultCollapseContent: !!config?.ui.default_collapse_content,
         highlightedMessage,
         loading,
         showFeedbackButtons: enableFeedback,
-        uiName: projectSettings?.ui?.name || '',
+        uiName: config?.ui?.name || '',
         onElementRefClick,
         onError,
         onFeedbackUpdated,
-        onPlaygroundButtonClick
+        onFeedbackDeleted
       };
     }, [
-      appSettings.defaultCollapseContent,
-      appSettings.expandAll,
-      appSettings.hideCot,
       askUser,
-      avatars,
       enableFeedback,
       highlightedMessage,
       loading,
-      projectSettings?.ui?.name,
+      config?.ui?.name,
+      config?.features?.unsafe_allow_html,
       onElementRefClick,
       onError,
-      onFeedbackUpdated,
-      onPlaygroundButtonClick
+      onFeedbackUpdated
     ]);
 
     return (
@@ -209,8 +136,6 @@ const MessageContainer = memo(
         actions={messageActions}
         elements={elements}
         messages={messages}
-        autoScroll={autoScroll}
-        setAutoScroll={setAutoScroll}
         context={memoizedContext}
       />
     );

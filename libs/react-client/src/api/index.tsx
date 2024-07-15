@@ -1,11 +1,12 @@
-import { IConversation, IPrompt } from 'src/types';
+import { IThread } from 'src/types';
 import { removeToken } from 'src/utils/token';
+
+import { IFeedback } from 'src/types/feedback';
 
 export * from './hooks/auth';
 export * from './hooks/api';
 
-export interface IConversationsFilters {
-  authorEmail?: string;
+export interface IThreadFilters {
   search?: string;
   feedback?: number;
 }
@@ -42,6 +43,7 @@ type Payload = FormData | any;
 export class APIBase {
   constructor(
     public httpEndpoint: string,
+    public type: 'webapp' | 'copilot' | 'teams' | 'slack' | 'discord',
     public on401?: () => void,
     public onError?: (error: ClientError) => void
   ) {}
@@ -147,74 +149,37 @@ export class ChainlitAPI extends APIBase {
     return res.json();
   }
 
-  async getCompletion(
-    prompt: IPrompt,
-    userEnv = {},
-    controller: AbortController,
-    accessToken?: string,
-    tokenCb?: (done: boolean, token: string) => void
-  ) {
-    const response = await this.post(
-      `/completion`,
-      { prompt, userEnv },
-      accessToken,
-      controller.signal
-    );
-
-    const reader = response?.body?.getReader();
-
-    const stream = new ReadableStream({
-      start(controller) {
-        function push() {
-          reader!
-            .read()
-            .then(({ done, value }) => {
-              if (done) {
-                controller.close();
-                tokenCb && tokenCb(done, '');
-                return;
-              }
-              const string = new TextDecoder('utf-8').decode(value);
-              tokenCb && tokenCb(done, string);
-              controller.enqueue(value);
-              push();
-            })
-            .catch((err) => {
-              controller.close();
-              tokenCb && tokenCb(true, '');
-              console.error(err);
-            });
-        }
-        push();
-      }
-    });
-
-    return stream;
+  async logout() {
+    const res = await this.post(`/logout`, {});
+    return res.json();
   }
 
-  async setHumanFeedback(
-    messageId: string,
-    feedback: number,
-    feedbackComment?: string,
+  async setFeedback(
+    feedback: IFeedback,
     accessToken?: string
-  ) {
-    await this.put(
-      `/message/feedback`,
-      { messageId, feedback, feedbackComment },
-      accessToken
-    );
+  ): Promise<{ success: boolean; feedbackId: string }> {
+    const res = await this.put(`/feedback`, { feedback }, accessToken);
+    return res.json();
   }
 
-  async getConversations(
+  async deleteFeedback(
+    feedbackId: string,
+    accessToken?: string
+  ): Promise<{ success: boolean }> {
+    const res = await this.delete(`/feedback`, { feedbackId }, accessToken);
+    return res.json();
+  }
+
+  async listThreads(
     pagination: IPagination,
-    filter: IConversationsFilters,
+    filter: IThreadFilters,
     accessToken?: string
   ): Promise<{
     pageInfo: IPageInfo;
-    data: IConversation[];
+    data: IThread[];
   }> {
     const res = await this.post(
-      `/project/conversations`,
+      `/project/threads`,
       { pagination, filter },
       accessToken
     );
@@ -222,14 +187,64 @@ export class ChainlitAPI extends APIBase {
     return res.json();
   }
 
-  async deleteConversation(conversationId: string, accessToken?: string) {
-    const res = await this.delete(
-      `/project/conversation`,
-      { conversationId },
-      accessToken
-    );
+  async deleteThread(threadId: string, accessToken?: string) {
+    const res = await this.delete(`/project/thread`, { threadId }, accessToken);
 
     return res.json();
+  }
+
+  uploadFile(
+    file: File,
+    onProgress: (progress: number) => void,
+    sessionId: string,
+    token?: string
+  ) {
+    const xhr = new XMLHttpRequest();
+
+    const promise = new Promise<{ id: string }>((resolve, reject) => {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      xhr.open(
+        'POST',
+        this.buildEndpoint(`/project/file?session_id=${sessionId}`),
+        true
+      );
+
+      if (token) {
+        xhr.setRequestHeader('Authorization', this.checkToken(token));
+      }
+
+      // Track the progress of the upload
+      xhr.upload.onprogress = function (event) {
+        if (event.lengthComputable) {
+          const percentage = (event.loaded / event.total) * 100;
+          onProgress(percentage);
+        }
+      };
+
+      xhr.onload = function () {
+        if (xhr.status === 200) {
+          const response = JSON.parse(xhr.responseText);
+          resolve(response);
+        } else {
+          reject('Upload failed');
+        }
+      };
+
+      xhr.onerror = function () {
+        reject('Upload error');
+      };
+
+      xhr.send(formData);
+    });
+
+    return { xhr, promise };
+  }
+
+  getElementUrl(id: string, sessionId: string) {
+    const queryParams = `?session_id=${sessionId}`;
+    return this.buildEndpoint(`/project/file/${id}${queryParams}`);
   }
 
   getLogoEndpoint(theme: string) {

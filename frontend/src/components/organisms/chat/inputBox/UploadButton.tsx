@@ -1,17 +1,17 @@
-import { useRecoilValue } from 'recoil';
+import { useUpload } from 'hooks';
 
-import AttachFile from '@mui/icons-material/AttachFile';
-import { IconButton, Tooltip } from '@mui/material';
+import { IconButton, Theme, Tooltip, useMediaQuery } from '@mui/material';
 
-import { FileSpec, IFileResponse } from '@chainlit/react-client';
-import { useUpload } from '@chainlit/react-components';
+import { FileSpec, useConfig } from '@chainlit/react-client';
 
-import { projectSettingsState } from 'state/project';
+import { Translator } from 'components/i18n';
+
+import AttachmentIcon from 'assets/attachment';
 
 type Props = {
   disabled?: boolean;
   fileSpec: FileSpec;
-  onFileUpload: (files: IFileResponse[]) => void;
+  onFileUpload: (files: File[]) => void;
   onFileUploadError: (error: string) => void;
 };
 
@@ -21,29 +21,38 @@ const UploadButton = ({
   onFileUpload,
   onFileUploadError
 }: Props) => {
-  const pSettings = useRecoilValue(projectSettingsState);
-
+  const { config } = useConfig();
   const upload = useUpload({
     spec: fileSpec,
-    onResolved: (payloads: IFileResponse[]) => onFileUpload(payloads),
+    onResolved: (payloads: File[]) => onFileUpload(payloads),
     onError: onFileUploadError,
     options: { noDrag: true }
   });
 
-  if (!upload || !pSettings?.features?.multi_modal) return null;
-  const { getRootProps, getInputProps, uploading } = upload;
+  const size = useMediaQuery<Theme>((theme) => theme.breakpoints.down('sm'))
+    ? 'small'
+    : 'medium';
+
+  if (!upload || !config?.features?.spontaneous_file_upload?.enabled)
+    return null;
+  const { getRootProps, getInputProps } = upload;
 
   return (
-    <Tooltip title="Attach files">
+    <Tooltip
+      title={
+        <Translator path="components.organisms.chat.inputBox.UploadButton.attachFiles" />
+      }
+    >
       <span>
         <input id="upload-button-input" {...getInputProps()} />
         <IconButton
-          id={uploading ? 'upload-button-loading' : 'upload-button'}
-          disabled={uploading || disabled}
+          id={disabled ? 'upload-button-loading' : 'upload-button'}
+          disabled={disabled}
           color="inherit"
+          size={size}
           {...getRootProps({ className: 'dropzone' })}
         >
-          <AttachFile />
+          <AttachmentIcon fontSize={size} />
         </IconButton>
       </span>
     </Tooltip>

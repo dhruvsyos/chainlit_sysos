@@ -5,6 +5,8 @@ dist
 
 .env
 
+*.files
+
 poetry.lock
 
 venv
@@ -12,7 +14,7 @@ venv
 .DS_Store
 
 .chainlit
-!cypress/e2e/**/*/.chainlit
+!cypress/e2e/**/*/.chainlit/*
 chainlit.md
 
 cypress/screenshots

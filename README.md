@@ -1,22 +1,30 @@
-# Welcome to Chainlit 👋
+# Welcome to Chainlit by Literal AI 👋
 
 [![](https://dcbadge.vercel.app/api/server/ZThrUxbAYw?style=flat)](https://discord.gg/k73SQ3FyUh)
 [![Twitter](https://img.shields.io/twitter/url/https/twitter.com/chainlit_io.svg?style=social&label=Follow%20%40chainlit_io)](https://twitter.com/chainlit_io)
+![PyPI - Downloads](https://img.shields.io/pypi/dm/chainlit)
+[![GitHub Contributors](https://img.shields.io/github/contributors/chainlit/chainlit)](https://github.com/chainlit/chainlit/graphs/contributors)
 [![CI](https://github.com/Chainlit/chainlit/actions/workflows/ci.yaml/badge.svg)](https://github.com/Chainlit/chainlit/actions/workflows/ci.yaml)
 
-**Build a production ready Chat GPT like application in minutes ⚡️**
+**Build production-ready Conversational AI applications in minutes, not weeks ⚡️**
 
-Chainlit is an open-source async Python framework that makes it incredibly fast to build Chat GPT like applications with your **own business logic and data**.
+Chainlit is an open-source async Python framework which allows developers to build scalable Conversational AI or agentic applications.
 
-Key features:
+- ✅ ChatGPT-like application
+- ✅ Embedded Chatbot & Software Copilot
+- ✅ Slack & Discord
+- ✅ Custom frontend (build your own agentic experience)
+- ✅ API Endpoint
 
-- [💬 Multi Modal chats](https://docs.chainlit.io/chat-experience/elements)
-- [💭 Chain of Thought visualisation](https://docs.chainlit.io/observability-iteration/chain-of-thought)
-- [💾 Data persistence + human feedback](https://docs.chainlit.io/chat-data/overview)
-- [🛝 In context Prompt Playground](https://docs.chainlit.io/observability-iteration/prompt-playground/overview)
-- [👤 Authentication](https://docs.chainlit.io/authentication/overview)
+Full documentation is available [here](https://docs.chainlit.io). You can ask Chainlit related questions to [Chainlit Help](https://help.chainlit.io/), an app built using Chainlit!
 
-https://github.com/Chainlit/chainlit/assets/13104895/8882af90-fdfa-4b24-8200-1ee96c6c7490
+> [!NOTE]  
+> Contact us [here](https://forms.gle/BX3UNBLmTF75KgZVA) for **Enterprise Support**.
+> Check out [Literal AI](https://literalai.com), our product to monitor and evaluate LLM applications! It works with any Python or TypeScript applications and [seamlessly](https://docs.chainlit.io/data-persistence/overview) with Chainlit by adding a `LITERAL_API_KEY` in your project.
+
+<p align="center">
+    <img src="https://github.com/Chainlit/chainlit/assets/13104895/0c2cc7a9-766c-41d3-aae2-117a2d0eb8ed" width="80%" />
+</p>
 
 ## Installation
 
@@ -29,14 +37,6 @@ $ chainlit hello
 
 If this opens the `hello app` in your browser, you're all set!
 
-## 📖 Documentation
-
-Please see [here](https://docs.chainlit.io) for full documentation on:
-
-- Getting started (installation, simple examples)
-- Examples
-- Reference (full API docs)
-
 ## 🚀 Quickstart
 
 ### 🐍 Pure Python
@@ -47,11 +47,18 @@ Create a new file `demo.py` with the following code:
 import chainlit as cl
 
 
+@cl.step(type="tool")
+async def tool():
+    # Fake tool
+    await cl.sleep(2)
+    return "Response from the tool!"
+
+
 @cl.on_message  # this function will be called every time a user inputs a message in the UI
 async def main(message: cl.Message):
     """
     This function is called every time a user inputs a message in the UI.
-    It sends back an intermediate response from Tool 1, followed by the final answer.
+    It sends back an intermediate response from the tool, followed by the final answer.
 
     Args:
         message: The user's message.
@@ -60,15 +67,12 @@ async def main(message: cl.Message):
         None.
     """
 
-    # Send an intermediate response from Tool 1.
-    await cl.Message(
-        author="Tool 1",
-        content=f"Response from tool1",
-        parent_id=message.id,
-    ).send()
+    final_answer = await cl.Message(content="").send()
 
-    # Send the final answer.
-    await cl.Message(content=f"This is the final answer").send()
+    # Call the tool
+    final_answer.content = await tool()
+
+    await final_answer.update()
 ```
 
 Now run it!
@@ -79,49 +83,29 @@ $ chainlit run demo.py -w
 
 <img src="/images/quick-start.png" alt="Quick Start"></img>
 
-### 🔗 Integrations
+## 🎉 Key Features and Integrations
+
+Full documentation is available [here](https://docs.chainlit.io). Key features:
+
+- [💬 Multi Modal chats](https://docs.chainlit.io/advanced-features/multi-modal)
+- [💭 Chain of Thought visualisation](https://docs.chainlit.io/concepts/step)
+- [💾 Data persistence + human feedback](https://docs.chainlit.io/data-persistence/overview)
+- [🐛 Debug Mode](https://docs.chainlit.io/data-persistence/enterprise#debug-mode)
+- [👤 Authentication](https://docs.chainlit.io/authentication/overview)
 
 Chainlit is compatible with all Python programs and libraries. That being said, it comes with integrations for:
 
-- [Langchain](https://docs.chainlit.io/integrations/langchain)
+- [LangChain](https://docs.chainlit.io/integrations/langchain)
+- [Llama Index](https://docs.chainlit.io/integrations/llama-index)
 - [Autogen](https://github.com/Chainlit/cookbook/tree/main/pyautogen)
 - [OpenAI Assistant](https://github.com/Chainlit/cookbook/tree/main/openai-assistant)
-- [Llama Index](https://docs.chainlit.io/integrations/llama-index)
 - [Haystack](https://docs.chainlit.io/integrations/haystack)
-- [Langflow](https://docs.chainlit.io/integrations/langflow)
-
-## 🎨 Custom Frontend
-
-Chainlit allows you to create a custom frontend for your application, offering you the flexibility to design a unique user experience. By integrating your frontend with Chainlit's backend, you can harness the full power of Chainlit's features, including:
-
-- Abstractions for easier development
-- Monitoring and observability
-- Seamless integrations with various tools
-- Robust authentication mechanisms
-- Support for multi-user environments
-- Efficient data streaming capabilities
-
-To build and connect your own frontend, check out our [Custom Frontend Cookbook](https://github.com/Chainlit/cookbook/tree/main/custom-frontend).
 
 ## 📚 More Examples - Cookbook
 
 You can find various examples of Chainlit apps [here](https://github.com/Chainlit/cookbook) that leverage tools and services such as OpenAI, Anthropiс, LangChain, LlamaIndex, ChromaDB, Pinecone and more.
 
-## 🛣 Roadmap
-
-- [x] Selectable chat profiles (at the beginning of a chat)
-- [ ] One click chat sharing
-- New clients:
-  - [x] Custom React app
-  - [ ] Slack
-  - [ ] Discord
-  - [ ] Website embbed
-
 Tell us what you would like to see added in Chainlit using the Github issues or on [Discord](https://discord.gg/k73SQ3FyUh).
-
-## 🏢 Enterprise support
-
-For entreprise grade features and self hosting, please visit this [page](https://docs.chainlit.io/cloud/persistence/enterprise) and fill the form.
 
 ## 💁 Contributing
 

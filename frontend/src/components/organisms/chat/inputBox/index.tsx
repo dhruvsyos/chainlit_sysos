@@ -1,31 +1,28 @@
-import { useAuth } from 'api/auth';
 import { memo, useCallback } from 'react';
 import { useSetRecoilState } from 'recoil';
 import { v4 as uuidv4 } from 'uuid';
 
 import { Box } from '@mui/material';
 
-import {
-  FileSpec,
-  IFileElement,
-  IFileResponse,
-  IMessage,
-  useChatInteract
-} from '@chainlit/react-client';
+import { useAuth } from '@chainlit/react-client';
+import { FileSpec, IStep, useChatInteract } from '@chainlit/react-client';
 
-import { chatHistoryState } from 'state/chatHistory';
-import { IProjectSettings } from 'state/project';
+import ScrollDownButton from 'components/atoms/buttons/scrollDownButton';
 
-import StopButton from '../stopButton';
+import { useLayoutMaxWidth } from 'hooks/useLayoutMaxWidth';
+
+import { IAttachment } from 'state/chat';
+import { inputHistoryState } from 'state/userInputHistory';
+
 import Input from './input';
 import WaterMark from './waterMark';
 
 interface Props {
   fileSpec: FileSpec;
-  onFileUpload: (payload: IFileResponse[]) => void;
+  onFileUpload: (payload: File[]) => void;
   onFileUploadError: (error: string) => void;
   setAutoScroll: (autoScroll: boolean) => void;
-  projectSettings?: IProjectSettings;
+  autoScroll?: boolean;
 }
 
 const InputBox = memo(
@@ -34,54 +31,61 @@ const InputBox = memo(
     onFileUpload,
     onFileUploadError,
     setAutoScroll,
-    projectSettings
+    autoScroll
   }: Props) => {
-    const setChatHistory = useSetRecoilState(chatHistoryState);
+    const layoutMaxWidth = useLayoutMaxWidth();
+    const setInputHistory = useSetRecoilState(inputHistoryState);
 
     const { user } = useAuth();
     const { sendMessage, replyMessage } = useChatInteract();
     // const tokenCount = useRecoilValue(tokenCountState);
 
     const onSubmit = useCallback(
-      async (msg: string, files?: IFileElement[]) => {
-        const message: IMessage = {
+      async (msg: string, attachments?: IAttachment[]) => {
+        const message: IStep = {
+          threadId: '',
           id: uuidv4(),
-          author: user?.username || 'User',
-          authorIsUser: true,
-          content: msg,
+          name: user?.identifier || 'User',
+          type: 'user_message',
+          output: msg,
           createdAt: new Date().toISOString()
         };
 
-        setChatHistory((old) => {
+        setInputHistory((old) => {
           const MAX_SIZE = 50;
-          const messages = [...(old.messages || [])];
-          messages.push({
+          const inputs = [...(old.inputs || [])];
+          inputs.push({
             content: msg,
             createdAt: new Date().getTime()
           });
 
           return {
             ...old,
-            messages:
-              messages.length > MAX_SIZE
-                ? messages.slice(messages.length - MAX_SIZE)
-                : messages
+            inputs:
+              inputs.length > MAX_SIZE
+                ? inputs.slice(inputs.length - MAX_SIZE)
+                : inputs
           };
         });
 
+        const fileReferences = attachments
+          ?.filter((a) => !!a.serverId)
+          .map((a) => ({ id: a.serverId! }));
+
         setAutoScroll(true);
-        sendMessage(message, files);
+        sendMessage(message, fileReferences);
       },
-      [user, projectSettings, sendMessage]
+      [user, sendMessage]
     );
 
     const onReply = useCallback(
       async (msg: string) => {
-        const message = {
+        const message: IStep = {
+          threadId: '',
           id: uuidv4(),
-          author: user?.username || 'User',
-          authorIsUser: true,
-          content: msg,
+          name: user?.identifier || 'User',
+          type: 'user_message',
+          output: msg,
           createdAt: new Date().toISOString()
         };
 
@@ -94,18 +98,22 @@ const InputBox = memo(
     return (
       <Box
         display="flex"
+        position="relative"
         flexDirection="column"
         gap={1}
-        p={2}
+        pb={2}
+        px={2}
         sx={{
           boxSizing: 'border-box',
           width: '100%',
-          maxWidth: '60rem',
+          maxWidth: layoutMaxWidth,
           m: 'auto',
           justifyContent: 'center'
         }}
       >
-        <StopButton />
+        {!autoScroll ? (
+          <ScrollDownButton onClick={() => setAutoScroll(true)} />
+        ) : null}
         <Box>
           <Input
             fileSpec={fileSpec}
